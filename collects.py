@@ -1,9 +1,12 @@
-import requests, re, os, ipaddress, random, uuid
+import requests, re, os, ipaddress, random, uuid, socket
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-myID = uuid
 
-# ✅ URL源与简称
+# ✅ 基础配置
+PORT = '443'
+HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+
+# ✅ 1. 原始 URL 数据源
 sources = {
     'https://api.uouin.com/cloudflare.html': 'Uouin',
     'https://ip.164746.xyz': 'ZXW',
@@ -19,86 +22,138 @@ sources = {
     'https://raw.githubusercontent.com/xingpingcn/enhanced-FaaS-in-China/refs/heads/main/Cf.json': 'FaaS'
 }
 
-PORT = '443'  # 目标端口号
+# ✅ 2. 你提供的域名列表
+domain_list = [
+    "links1.cloudflare.com", "www.indutrade.se", "jackcraft.cn", "cfcname.cdn.urlce.com",
+    "cfcdn.api.urlce.com", "singgcdn.singgnetworkcdn.com", "coori.cloudflareaccess.com",
+    "staticdelivery.nexusmods.com", "www.nexusmods.com", "store.ubi.com", "ssh.awcode.cn",
+    "cfyx.aliyun.20237737.xyz", "openai.com", "www.mnn.tw", "blog.646474.xyz",
+    "www.skillshare.com", "cf.130519.xyz", "www.mofanghao.com", "www.securitybank.com",
+    "www.sdgggo.com", "blog.811520.xyz", "www.colamanga.com", "cloudflare-ech.com",
+    "www.hostuno.com", "www.serv00.com", "expireddomains.com", "www.dotdotnetworks.com",
+    "www.lmu5.com", "www.wrangler.com", "www.entrust.com", "www.vitafoodsglobal.com",
+    "www.softswiss.com", "www.hostgator.com", "www.ubykotex.com", "www.uts.edu.au",
+    "www.baxterford.com", "www.usphonebook.com", "www.hog.com", "www.harley-davidson.com",
+    "www.dbs.com", "www.dbs.com.sg", "www.cerave.uy", "www.olukai.com", "www.maybelline.de",
+    "www.secretsales.com", "www.starbucks.co.uk", "polestar.com", "www.casetify.com",
+    "casetify.com", "goremountain.com", "www.qualcomm.com", "hostinger.in", "cf.636949.xyz",
+    "cf.877774.xyz", "kirssr.fun", "cloudflare-dns.com", "cdns.doon.eu.org",
+    "www.cloudflare-dns.com", "openapi.973973.xyz", "sheetdb.io", "www.shopify.com",
+    "mfa.gov.ua", "dnb.com.sg", "widget.time.is", "www.freedidi.com", "usa.visa.com",
+    "saas.sin.fan", "cloudflare.cdnjson.com", "cmcc.877774.xyz", "ct.877774.xyz",
+    "ks5555555.com", "pete.ns.cloudflare.com", "ken.ns.cloudflare.com", "tani.ns.cloudflare.com",
+    "toby.ns.cloudflare.com", "evangeline.ns.cloudflare.com", "fonzie.ns.cloudflare.com",
+    "henrik.ns.cloudflare.com", "lola.ns.cloudflare.com", "alla.ns.cloudflare.com",
+    "kipp.ns.cloudflare.com", "josh.ns.Cloudflare.com", "rayne.ns.cloudflare.com",
+    "dorthy.ns.cloudflare.com", "vern.ns.cloudflare.com", "alec.ns.cloudflare.com",
+    "kate.ns.cloudflare.com", "princess.ns.cloudflare.com", "magali.ns.cloudflare.com",
+    "damon.ns.cloudflare.com", "kara.ns.cloudflare.com", "www.moodys.com", "www.sapaad.com",
+    "cdn.netflixgc.xyz", "www.worldlearning.org", "bestcf.030101.xyz", "1357900.xyz",
+    "dm84.net", "freeyx.cloudflare88.eu.org", "cfip.huangbin.net", "cdn1.5118cl0ud.xyz",
+    "e.download.yunzhongzhuan.com", "www.zmsub.top", "www.speedtest.net", "ips.993888.xyz",
+    "whatismyipaddress.com", "ip.skk.moe", "www.visa.com.hk", "www.visa.com.sg",
+    "www.visa.com.tw", "www.visa.com.mt", "www.visa.co.id", "www.visa.co.ke",
+    "www.visa.co.in", "www.visa.ca", "www.visa.com.ai", "africa.visa.com",
+    "caribbean.visa.com", "pages.dev", "store.epicgames.com", "www.epicgames.com",
+    "www.fortnite.com", "visaeurope.at", "qa.visamiddleeast.com", "time.is", "www.wto.org",
+    "icook.hk", "icook.tw", "visamiddleeast.com", "portal.cloudflarepartners.com",
+    "support.cloudflarewarp.com", "developers.cloudflare.com", "ai.cloudflare.com",
+    "try.cloudflare.com", "blog.cloudflare.com", "community.cloudflare.com",
+    "abuse.cloudflare.com", "sso.cloudflare.dev", "ns5.cloudflare.com", "ns6.cloudflare.com",
+    "ns7.cloudflare.com", "ns3.cloudflare.com", "ns4.cloudflare.com", "workers.cloudflare.com",
+    "radar.cloudflare.com", "support.cloudflare.com", "challenge.developers.cloudflare.com",
+    "pages.cloudflare.com", "ns.cloudflare.com", "arena.lmsys.org", "lmarena.ai",
+    "platform.dash.cloudflare.com", "info.cloudflare.com", "sparrow.cloudflare.com",
+    "videodelivery.net", "www.csgo.com", "digitalocean.com", "www.dynadot.com",
+    "singapore.com", "ping.pe", "store.ubisoft.com", "users.nexusmods.com",
+    "wall.alphacoders.com", "www.alphacoders.com", "www.hcaptcha.com", "www.wemod.com",
+    "faceit-client.faceit-cdn.net", "anticheat-client.faceit-cdn.net",
+    "download-alt.easyanticheat.net", "www.namesilo.com", "www.fontawesome.com",
+    "ajax.cdnjs.com", "uptimerobot.com", "opencollective.com", "www.hostpapa.in",
+    "www.hyva.com", "www.hostinger.com", "www.namecheap.com", "www.netim.com",
+    "www.spaceship.com", "www.domain.com", "www.epik.com", "malaysia.com",
+    "ae.visamiddleeast.com", "www.geolocation.com", "www.4chan.org", "customer.l53.net",
+    "www.coleman.com", "graylog.org", "david.ns.cloudflare.com", "june.ns.cloudflare.com",
+    "www.ipxo.com", "cdnjs.com", "www.racknerd.com", "pkg.cloudflare.com",
+    "discord.cloudflare.com", "crypto.cloudflare.com", "migp.cloudflare.com",
+    "api.radar.cloudflare.com", "r2-calculator.cloudflare.com", "rpki.cloudflare.com",
+    "performance.radar.cloudflare.com", "dash.teams.cloudflare.com", "one.dash.cloudflare.com",
+    "static.cloudflareinsights.com", "geolocation.onetrust.com", "gates.cloudflare.com",
+    "research.cloudflare.com", "partners.cloudflare.com", "peering.cloudflare.com",
+    "malcolm.cloudflare.com", "deploy.workers.cloudflare.com", "opaque.research.cloudflare.com",
+    "teams.cloudflare.com", "ct.cloudflare.com", "cn.cloudflare.com", "drand.cloudflare.com",
+    "classic.radar.cloudflare.com", "privacypass.cloudflare.com", "content.cloudflare.com",
+    "opaque-full.research.cloudflare.com", "icons.getbootstrap.com", "blog.getbootstrap.com",
+    "cloudflare.tv", "cloudflaretv.cloudflareaccess.com", "staging.cloudflare.tv",
+    "cloudflare.tv.cdn.cloudflare.net", "www.cloudflare.tv.cdn.cloudflare.net",
+    "staging.cloudflare.tv.cdn.cloudflare.net", "live.cloudflare.tv.cdn.cloudflare.net",
+    "www.cloudflare.tv", "radar-cfdata-org.cloudflareaccess.com", "isbgpsafeyet.com",
+    "anycast.com", "cffast.wawacm.com", "cfcnc.cdnddd.com", "dos-op.io", "www.noi.org",
+    "www.89d.com", "download.redis.io", "www.vitagreen.com", "www.h5.com",
+    "www.pacopacomama.com", "packages.adoptium.net", "haven1.tokensoft.io",
+    "binary.lge.modcdn.io", "nexusmods.com", "www.it7.net"
+]
 
-# 正则表达式
-ipv4_pattern = r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'
-ipv6_candidate_pattern = r'([a-fA-F0-9:]{2,39})'
-base_url = "https://ipinfo.io"
-path = "country"
-
-headers = {
-    'User-Agent': 'Mozilla/5.0'
-}
-
-# 删除旧文件
-for file in ['ipv4.txt', 'ipv6.txt']:
-    if os.path.exists(file):
-        os.remove(file)
-
-# IP 分类存储
+# 存储结果
 ipv4_dict = {}
 ipv6_dict = {}
 
-# 当前时间
-utctimestamp = datetime.now().strftime('%Y%m%d%H%M')
-beijing_time = datetime.utcnow() + timedelta(hours=8)
-now_str = beijing_time.strftime('%Y-%m-%d_%H:%M')
-timestamp = beijing_time.strftime('%Y%m%d_%H:%M')
-
-# 遍历来源
-for url, shortname in sources.items():
+def process_ip(ip, label):
+    """验证并格式化 IP 地址"""
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        content = response.text
+        ip_obj = ipaddress.ip_address(ip)
+        # 排除私有地址和回环地址
+        if ip_obj.is_private or ip_obj.is_loopback: return
+        
+        suffix = f"{label}-{uuid.uuid4().hex[27:]}"
+        if ip_obj.version == 4:
+            ipv4_dict[f"{ip}:{PORT}"] = suffix
+        elif ip_obj.version == 6:
+            ipv6_dict[f"[{ip_obj.compressed}]:{PORT}"] = suffix
+    except:
+        pass
 
-        if url.endswith('.txt'):
-            text = content
-        else:
+# --- 执行解析逻辑 ---
+
+# 1. 解析域名列表
+print(f"🔄 正在解析 {len(domain_list)} 个域名...")
+for dom in list(set(domain_list)): # set去重
+    try:
+        # 获取域名对应的所有 IP 信息
+        addrs = socket.getaddrinfo(dom, None)
+        for a in addrs:
+            process_ip(a[4][0], dom[:10]) # 取域名亲名前10位做备注
+    except:
+        continue
+
+# 2. 爬取 URL 源
+ipv4_re = r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'
+ipv6_re = r'([a-fA-F0-9:]{2,39})'
+
+for url, name in sources.items():
+    print(f"🌐 正在抓取源: {name}")
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        content = r.text
+        if not url.endswith('.txt'):
             soup = BeautifulSoup(content, 'html.parser')
-            elements = soup.find_all('tr') or soup.find_all('li') or soup
-            text = '\n'.join(el.get_text() for el in elements)
-
-        # IPv4 提取
-        for ip in re.findall(ipv4_pattern, text):
-            try:
-                if ipaddress.ip_address(ip).version == 4:                    
-                    response = requests.get(f"{base_url}/{ip}/{path}")
-                    location = response.text.strip('\n')
-                    ip_with_port = f"{ip}:{PORT}"
-                    comment = f"{location}-{myID.uuid4().hex[27:]}{str(random.randint(0,10))}"
-                    ipv4_dict[ip_with_port] = comment
-            except ValueError:
-                continue
-
-        # IPv6 提取
-        for ip in re.findall(ipv6_candidate_pattern, text):
-            try:
-                ip_obj = ipaddress.ip_address(ip)
-                if ip_obj.version == 6:
-                    ip_with_port = f"[{ip_obj.compressed}]:{PORT}"
-                    comment = f"{shortname}-{myID.uuid4().hex[27:]}{str(random.randint(0,10))}"
-                    ipv6_dict[ip_with_port] = comment
-            except ValueError:
-                continue
-
-    except requests.RequestException as e:
-        print(f"[请求错误] {url} -> {e}")
+            content = soup.get_text()
+        
+        for ip in re.findall(ipv4_re, content): process_ip(ip, name)
+        for ip in re.findall(ipv6_re, content): process_ip(ip, name)
     except Exception as e:
-        print(f"[解析错误] {url} -> {e}")
+        print(f"⚠️ 跳过源 {name}: {e}")
 
-# 写入 ipv4.txt（仅IPv4）
-with open('ipv4.txt', 'w') as f4:
-    f4.write(f"ipv4.list.updated.at#Upd{timestamp}\n")
-    for ip in sorted(ipv4_dict):
-        f4.write(f"{ip}#{ipv4_dict[ip]}\n")
+# --- 保存文件 ---
+timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime('%Y%m%d_%H:%M')
 
-# 写入 ipv6.txt（仅IPv6）
-with open('ipv6.txt', 'w') as f6:
-    f6.write(f"ipv6.list.updated.at#Upd{timestamp}\n")
-    for ip in sorted(ipv6_dict):
-        f6.write(f"{ip}#{ipv6_dict[ip]}\n")
+for filename, data in [('ipv4.txt', ipv4_dict), ('ipv6.txt', ipv6_dict)]:
+    if os.path.exists(filename): os.remove(filename)
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(f"{filename}.list.updated.at#Upd{timestamp}\n")
+        for ip, note in sorted(data.items()):
+            f.write(f"{ip}#{note}\n")
 
-print(f"✅ IPv4 写入 ipv4.txt，共 {len(ipv4_dict)} 个")
-print(f"✅ IPv6 写入 ipv6.txt，共 {len(ipv6_dict)} 个")
+print(f"\n✅ 处理完成！")
+print(f"📦 IPv4 数量: {len(ipv4_dict)}")
+print(f"📦 IPv6 数量: {len(ipv6_dict)}")
