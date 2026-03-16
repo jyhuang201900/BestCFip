@@ -1,9 +1,8 @@
-import requests, re, os, ipaddress, random, uuid, socket
+import requests, re, os, ipaddress, socket
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 
 # ✅ 基础配置
-PORT = '443'
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
 # ✅ 1. 原始 URL 数据源
@@ -22,7 +21,7 @@ sources = {
     'https://raw.githubusercontent.com/xingpingcn/enhanced-FaaS-in-China/refs/heads/main/Cf.json': 'FaaS'
 }
 
-# ✅ 2. 你提供的域名列表
+# ✅ 2. 完整的域名列表
 domain_list = [
     "links1.cloudflare.com", "www.indutrade.se", "jackcraft.cn", "cfcname.cdn.urlce.com",
     "cfcdn.api.urlce.com", "singgcdn.singgnetworkcdn.com", "coori.cloudflareaccess.com",
@@ -94,35 +93,33 @@ domain_list = [
     "binary.lge.modcdn.io", "nexusmods.com", "www.it7.net"
 ]
 
-# 存储结果
-ipv4_dict = {}
-ipv6_dict = {}
+# 存储结果 (使用 set 自动去重)
+ipv4_set = set()
+ipv6_set = set()
 
-def process_ip(ip, label):
-    """验证并格式化 IP 地址"""
+def process_ip(ip):
+    """验证并存储纯 IP"""
     try:
         ip_obj = ipaddress.ip_address(ip)
         # 排除私有地址和回环地址
         if ip_obj.is_private or ip_obj.is_loopback: return
         
-        suffix = f"{label}-{uuid.uuid4().hex[27:]}"
         if ip_obj.version == 4:
-            ipv4_dict[f"{ip}:{PORT}"] = suffix
+            ipv4_set.add(str(ip_obj))
         elif ip_obj.version == 6:
-            ipv6_dict[f"[{ip_obj.compressed}]:{PORT}"] = suffix
+            ipv6_set.add(ip_obj.compressed)
     except:
         pass
 
-# --- 执行解析逻辑 ---
+# --- 执行逻辑 ---
 
 # 1. 解析域名列表
-print(f"🔄 正在解析 {len(domain_list)} 个域名...")
-for dom in list(set(domain_list)): # set去重
+print(f"🔄 正在从 {len(domain_list)} 个域名中解析 IP...")
+for dom in list(set(domain_list)):
     try:
-        # 获取域名对应的所有 IP 信息
         addrs = socket.getaddrinfo(dom, None)
         for a in addrs:
-            process_ip(a[4][0], dom[:10]) # 取域名亲名前10位做备注
+            process_ip(a[4][0])
     except:
         continue
 
@@ -139,21 +136,20 @@ for url, name in sources.items():
             soup = BeautifulSoup(content, 'html.parser')
             content = soup.get_text()
         
-        for ip in re.findall(ipv4_re, content): process_ip(ip, name)
-        for ip in re.findall(ipv6_re, content): process_ip(ip, name)
+        for ip in re.findall(ipv4_re, content): process_ip(ip)
+        for ip in re.findall(ipv6_re, content): process_ip(ip)
     except Exception as e:
-        print(f"⚠️ 跳过源 {name}: {e}")
+        print(f"⚠️ 跳过源 {name}")
 
 # --- 保存文件 ---
-timestamp = (datetime.utcnow() + timedelta(hours=8)).strftime('%Y%m%d_%H:%M')
-
-for filename, data in [('ipv4.txt', ipv4_dict), ('ipv6.txt', ipv6_dict)]:
+for filename, data_set in [('ipv4.txt', ipv4_set), ('ipv6.txt', ipv6_set)]:
     if os.path.exists(filename): os.remove(filename)
+    # 按自然顺序排序后写入
+    sorted_ips = sorted(list(data_set))
     with open(filename, 'w', encoding='utf-8') as f:
-        f.write(f"{filename}.list.updated.at#Upd{timestamp}\n")
-        for ip, note in sorted(data.items()):
-            f.write(f"{ip}#{note}\n")
+        for ip in sorted_ips:
+            f.write(f"{ip}\n")
 
 print(f"\n✅ 处理完成！")
-print(f"📦 IPv4 数量: {len(ipv4_dict)}")
-print(f"📦 IPv6 数量: {len(ipv6_dict)}")
+print(f"📦 生成的 IPv4 数量: {len(ipv4_set)}")
+print(f"📦 生成的 IPv6 数量: {len(ipv6_set)}")
