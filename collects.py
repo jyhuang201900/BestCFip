@@ -1,26 +1,20 @@
-import requests, re, os, ipaddress, socket, time
+import requests, re, os, ipaddress, socket, time, subprocess
 from bs4 import BeautifulSoup
 import concurrent.futures
-import urllib3
-
-# 禁用未验证 HTTPS 请求的警告
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= 基础配置 =================
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
 # ================= 测速参数配置 =================
-# 阶段一：TCP 延迟测速
 TEST_PORT = 443
-PING_TIMEOUT = 1.0          # Ping 超时时间(秒)
-MAX_PING_WORKERS = 200      # Ping 并发数
+PING_TIMEOUT = 1.0          
+MAX_PING_WORKERS = 200      
 
-# 阶段二：真实下载测速
-DOWNLOAD_TEST_COUNT = 50    # 只对延迟最低的前 50 个 IP 测速
-DOWNLOAD_TIMEOUT = 5.0      # 下载测试掐断时间(秒) - 已修改为 5s
-MAX_DL_WORKERS = 3          # 下载测速并发数 - 已修改为 3
-TEST_FILE_SIZE = 500 * 1024 * 1024 # 测试文件大小 - 已修改为 500MB
-TEST_HOST = "speed.cloudflare.com" # 伪造的 Host 头
+DOWNLOAD_TEST_COUNT = 50    
+DOWNLOAD_TIMEOUT = 5.0      
+MAX_DL_WORKERS = 3          
+TEST_FILE_SIZE = 500 * 1024 * 1024 
+TEST_HOST = "speed.cloudflare.com" 
 
 # ================= 1. 原始 URL 数据源 =================
 sources = {
@@ -110,7 +104,6 @@ domain_list = [
 ipv4_set = set()
 
 def process_ip(ip):
-    """验证并存储纯 IPv4"""
     try:
         ip_obj = ipaddress.ip_address(ip)
         if ip_obj.is_private or ip_obj.is_loopback: return
@@ -122,7 +115,6 @@ def process_ip(ip):
 # ================= 核心工作库 =================
 
 def check_ip_latency(ip):
-    """阶段一：TCP 延迟测试"""
     start_time = time.time()
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -133,7 +125,6 @@ def check_ip_latency(ip):
         return ip, None
 
 def run_ping_test(ip_set):
-    """多线程并发执行 Ping 测试"""
     print(f"\n🚀 [阶段一] 开始测试 {len(ip_set)} 个 IPv4 节点的 TCP 延迟...")
     valid_ips = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_PING_WORKERS) as executor:
@@ -150,33 +141,32 @@ def run_ping_test(ip_set):
     return valid_ips
 
 def check_download_speed(ip_data):
-    """阶段二：真实 HTTP 下载测速"""
+    """阶段二：调用系统原生 curl 进行高强度下载测速 (完美解决 SNI 问题)"""
     ip, latency = ip_data
-    url = f"https://{ip}/__down?bytes={TEST_FILE_SIZE}"
+    url = f"https://{TEST_HOST}/__down?bytes={TEST_FILE_SIZE}"
     
-    headers = {'Host': TEST_HOST, 'User-Agent': HEADERS['User-Agent']}
-    start_time = time.time()
-    downloaded_bytes = 0
+    # 构建 curl 命令
+    # --resolve 强制将域名解析到我们的目标 IP
+    # -o os.devnull 将下载的数据直接抛弃，不占用硬盘和内存
+    # -w "%{speed_download}" 让 curl 在结束时只输出平均下载速度 (Bytes/s)
+    cmd = [
+        "curl", "-s", "-o", os.devnull, "-w", "%{speed_download}",
+        "--resolve", f"{TEST_HOST}:{TEST_PORT}:{ip}",
+        "--connect-timeout", str(PING_TIMEOUT),
+        "--max-time", str(DOWNLOAD_TIMEOUT),
+        url
+    ]
     
     try:
-        # verify=False 忽略证书警告，允许 IP 直连
-        r = requests.get(url, headers=headers, stream=True, timeout=PING_TIMEOUT, verify=False)
-        r.raise_for_status()
-        
-        for chunk in r.iter_content(chunk_size=8192):
-            if chunk:
-                downloaded_bytes += len(chunk)
-            if time.time() - start_time > DOWNLOAD_TIMEOUT:
-                break
-                
-        time_spent = time.time() - start_time
-        speed_mbps = (downloaded_bytes / time_spent) / (1024 * 1024)
+        # text=True 会直接返回字符串格式的终端输出
+        output = subprocess.check_output(cmd, text=True).strip()
+        speed_bps = float(output)
+        speed_mbps = speed_bps / (1024 * 1024)
         return ip, latency, speed_mbps
     except Exception:
         return ip, latency, 0.0
 
 def run_download_test(ping_sorted_ips):
-    """多线程并发执行下载测速"""
     targets = ping_sorted_ips[:DOWNLOAD_TEST_COUNT]
     if not targets: return []
     
@@ -200,7 +190,6 @@ def run_download_test(ping_sorted_ips):
 
 # ================= 主程序执行 =================
 
-# 1. 从域名列表解析 IP
 print(f"🔄 正在从 {len(domain_list)} 个域名中解析 IP...")
 for dom in list(set(domain_list)):
     try:
@@ -210,7 +199,6 @@ for dom in list(set(domain_list)):
     except:
         continue
 
-# 2. 从 URL 源抓取 IP
 ipv4_re = r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'
 
 for url, name in sources.items():
@@ -222,13 +210,9 @@ for url, name in sources.items():
     except:
         print(f"⚠️ 跳过源 {name}")
 
-# 3. 阶段一：执行 TCP 测试
 tested_ipv4 = run_ping_test(ipv4_set)
-
-# 4. 阶段二：执行真实下载测速
 final_ipv4 = run_download_test(tested_ipv4)
 
-# 5. 保存结果
 filename = 'ipv4_premium.txt'
 print(f"\n💾 正在保存优选结果...")
 if os.path.exists(filename): os.remove(filename)
