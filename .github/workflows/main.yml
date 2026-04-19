@@ -1,4 +1,4 @@
-name: Auto IP Collector
+name: Auto IP Collector & Speed Tester
 
 on:
   workflow_dispatch:
@@ -11,10 +11,10 @@ jobs:
 
     steps:
       - name: 📥 Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # ✅ 升级到 v4，消除 Node.js 警告
 
       - name: 🐍 Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # ✅ 升级到 v5，消除 Node.js 警告
         with:
           python-version: '3.11'
 
@@ -25,6 +25,7 @@ jobs:
           echo "update_version=$(TZ=UTC-8 date +'%Y-%m-%d %H:%M'):${sT}" >> ${GITHUB_ENV}
 
       - name: 🧠 Run IP collector script
+        # 确保您的 Python 脚本文件名依然是 collects.py
         run: |
           python collects.py
 
@@ -33,6 +34,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add ipv4.txt ipv6.txt
+          # ✅ 修改这里：只提交新脚本生成的优选结果文件
+          git add ipv4_premium.txt
           git diff --cached --quiet || git commit -m "Updated at ${update_version}"
           git push
