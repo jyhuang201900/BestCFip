@@ -1,40 +1,38 @@
-name: Auto IP Collector & Speed Tester
+name: Auto IP Collector
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 */4 * * *' # every 4 hours
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */4 * * *' # every 4 hours
 
 jobs:
-  collect:
-    runs-on: ubuntu-latest
+  collect:
+    runs-on: ubuntu-latest
 
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4 # ✅ 升级到 v4，消除 Node.js 警告
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v3
 
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@v5 # ✅ 升级到 v5，消除 Node.js 警告
-        with:
-          python-version: '3.11'
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-      - name: 📦 Install dependencies
-        run: |
-          pip install requests beautifulsoup4
-          sT=$(TZ=UTC-8 date +'%S')
-          echo "update_version=$(TZ=UTC-8 date +'%Y-%m-%d %H:%M'):${sT}" >> ${GITHUB_ENV}
+      - name: 📦 Install dependencies
+        run: |
+          pip install requests beautifulsoup4
+          sT=$(TZ=UTC-8 date +'%S')
+          echo "update_version=$(TZ=UTC-8 date +'%Y-%m-%d %H:%M'):${sT}" >> ${GITHUB_ENV}
 
-      - name: 🧠 Run IP collector script
-        # 确保您的 Python 脚本文件名依然是 collects.py
-        run: |
-          python collects.py
+      - name: 🧠 Run IP collector script
+        run: |
+          python collects.py
 
-      - name: 📤 Commit and push IP results
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      - name: 📤 Commit and push IP results
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          # ✅ 修改这里：只提交新脚本生成的优选结果文件
-          git add ipv4_premium.txt
-          git diff --cached --quiet || git commit -m "Updated at ${update_version}"
-          git push
+          git add ipv4.txt ipv6.txt
+          git diff --cached --quiet || git commit -m "Updated at ${update_version}"
+          git push
