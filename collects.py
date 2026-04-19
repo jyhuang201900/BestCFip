@@ -1,27 +1,41 @@
-import requests, re, os, ipaddress, socket
+import requests, re, os, ipaddress, socket, time
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
+import concurrent.futures
+import urllib3
 
-# ✅ 基础配置
+# 禁用未验证 HTTPS 请求的警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ================= 基础配置 =================
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
-# ✅ 1. 原始 URL 数据源
+# ================= 测速参数配置 =================
+# 阶段一：TCP 延迟测速
+TEST_PORT = 443
+PING_TIMEOUT = 1.0          # Ping 超时时间(秒)
+MAX_PING_WORKERS = 200      # Ping 并发数
+
+# 阶段二：真实下载测速
+DOWNLOAD_TEST_COUNT = 50    # 只对延迟最低的前 50 个 IP 测速
+DOWNLOAD_TIMEOUT = 5.0      # 下载测试掐断时间(秒) - 已修改为 5s
+MAX_DL_WORKERS = 3          # 下载测速并发数 - 已修改为 3
+TEST_FILE_SIZE = 500 * 1024 * 1024 # 测试文件大小 - 已修改为 500MB
+TEST_HOST = "speed.cloudflare.com" # 伪造的 Host 头
+
+# ================= 1. 原始 URL 数据源 =================
 sources = {
     'https://api.uouin.com/cloudflare.html': 'Uouin',
     'https://ip.164746.xyz': 'ZXW',
     'https://ipdb.api.030101.xyz/?type=bestcf': 'IPDB',
-    'https://www.wetest.vip/page/cloudflare/address_v6.html': 'WeTestV6',
-    'https://ipdb.api.030101.xyz/?type=bestcfv6': 'IPDBv6',
     'https://cf.090227.xyz/CloudFlareYes': 'CFYes',
     'https://ip.haogege.xyz': 'HaoGG',
     'https://vps789.com/openApi/cfIpApi': 'VPS',
     'https://www.wetest.vip/page/cloudflare/address_v4.html': 'WeTest',
     'https://addressesapi.090227.xyz/ct': 'CMLiuss',
-    'https://addressesapi.090227.xyz/cmcc-ipv6': 'CMLiussv6',
     'https://raw.githubusercontent.com/xingpingcn/enhanced-FaaS-in-China/refs/heads/main/Cf.json': 'FaaS'
 }
 
-# ✅ 2. 完整的域名列表
+# ================= 2. 完整的域名列表 =================
 domain_list = [
     "links1.cloudflare.com", "www.indutrade.se", "jackcraft.cn", "cfcname.cdn.urlce.com",
     "cfcdn.api.urlce.com", "singgcdn.singgnetworkcdn.com", "coori.cloudflareaccess.com",
@@ -93,27 +107,100 @@ domain_list = [
     "binary.lge.modcdn.io", "nexusmods.com", "www.it7.net"
 ]
 
-# 存储结果 (使用 set 自动去重)
 ipv4_set = set()
-ipv6_set = set()
 
 def process_ip(ip):
-    """验证并存储纯 IP"""
+    """验证并存储纯 IPv4"""
     try:
         ip_obj = ipaddress.ip_address(ip)
-        # 排除私有地址和回环地址
         if ip_obj.is_private or ip_obj.is_loopback: return
-        
         if ip_obj.version == 4:
             ipv4_set.add(str(ip_obj))
-        elif ip_obj.version == 6:
-            ipv6_set.add(ip_obj.compressed)
     except:
         pass
 
-# --- 执行逻辑 ---
+# ================= 核心工作库 =================
 
-# 1. 解析域名列表
+def check_ip_latency(ip):
+    """阶段一：TCP 延迟测试"""
+    start_time = time.time()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(PING_TIMEOUT)
+            s.connect((ip, TEST_PORT))
+        return ip, (time.time() - start_time) * 1000
+    except:
+        return ip, None
+
+def run_ping_test(ip_set):
+    """多线程并发执行 Ping 测试"""
+    print(f"\n🚀 [阶段一] 开始测试 {len(ip_set)} 个 IPv4 节点的 TCP 延迟...")
+    valid_ips = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_PING_WORKERS) as executor:
+        futures = {executor.submit(check_ip_latency, ip): ip for ip in ip_set}
+        completed = 0
+        for future in concurrent.futures.as_completed(futures):
+            completed += 1
+            ip, latency = future.result()
+            if latency is not None:
+                valid_ips.append((ip, latency))
+            print(f"\r进度: {completed}/{len(ip_set)} | 发现可用节点: {len(valid_ips)} 个", end="")
+    print()
+    valid_ips.sort(key=lambda x: x[1])
+    return valid_ips
+
+def check_download_speed(ip_data):
+    """阶段二：真实 HTTP 下载测速"""
+    ip, latency = ip_data
+    url = f"https://{ip}/__down?bytes={TEST_FILE_SIZE}"
+    
+    headers = {'Host': TEST_HOST, 'User-Agent': HEADERS['User-Agent']}
+    start_time = time.time()
+    downloaded_bytes = 0
+    
+    try:
+        # verify=False 忽略证书警告，允许 IP 直连
+        r = requests.get(url, headers=headers, stream=True, timeout=PING_TIMEOUT, verify=False)
+        r.raise_for_status()
+        
+        for chunk in r.iter_content(chunk_size=8192):
+            if chunk:
+                downloaded_bytes += len(chunk)
+            if time.time() - start_time > DOWNLOAD_TIMEOUT:
+                break
+                
+        time_spent = time.time() - start_time
+        speed_mbps = (downloaded_bytes / time_spent) / (1024 * 1024)
+        return ip, latency, speed_mbps
+    except Exception:
+        return ip, latency, 0.0
+
+def run_download_test(ping_sorted_ips):
+    """多线程并发执行下载测速"""
+    targets = ping_sorted_ips[:DOWNLOAD_TEST_COUNT]
+    if not targets: return []
+    
+    print(f"\n🚀 [阶段二] 开始对延迟最低的 {len(targets)} 个 IPv4 节点进行真实下载测速...")
+    print(f"参数: 500MB文件 | {DOWNLOAD_TIMEOUT}秒强制结束 | {MAX_DL_WORKERS}并发")
+    final_results = []
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_DL_WORKERS) as executor:
+        futures = {executor.submit(check_download_speed, item): item for item in targets}
+        completed = 0
+        for future in concurrent.futures.as_completed(futures):
+            completed += 1
+            ip, latency, speed = future.result()
+            if speed > 0:
+                final_results.append((ip, latency, speed))
+            print(f"\r进度: {completed}/{len(targets)} | 测出高带宽节点: {len(final_results)} 个", end="")
+            
+    print()
+    final_results.sort(key=lambda x: x[2], reverse=True)
+    return final_results
+
+# ================= 主程序执行 =================
+
+# 1. 从域名列表解析 IP
 print(f"🔄 正在从 {len(domain_list)} 个域名中解析 IP...")
 for dom in list(set(domain_list)):
     try:
@@ -123,33 +210,31 @@ for dom in list(set(domain_list)):
     except:
         continue
 
-# 2. 爬取 URL 源
+# 2. 从 URL 源抓取 IP
 ipv4_re = r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'
-ipv6_re = r'([a-fA-F0-9:]{2,39})'
 
 for url, name in sources.items():
     print(f"🌐 正在抓取源: {name}")
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
-        content = r.text
-        if not url.endswith('.txt'):
-            soup = BeautifulSoup(content, 'html.parser')
-            content = soup.get_text()
-        
+        content = r.text if url.endswith('.txt') else BeautifulSoup(r.text, 'html.parser').get_text()
         for ip in re.findall(ipv4_re, content): process_ip(ip)
-        for ip in re.findall(ipv6_re, content): process_ip(ip)
-    except Exception as e:
+    except:
         print(f"⚠️ 跳过源 {name}")
 
-# --- 保存文件 ---
-for filename, data_set in [('ipv4.txt', ipv4_set), ('ipv6.txt', ipv6_set)]:
-    if os.path.exists(filename): os.remove(filename)
-    # 按自然顺序排序后写入
-    sorted_ips = sorted(list(data_set))
-    with open(filename, 'w', encoding='utf-8') as f:
-        for ip in sorted_ips:
-            f.write(f"{ip}\n")
+# 3. 阶段一：执行 TCP 测试
+tested_ipv4 = run_ping_test(ipv4_set)
 
-print(f"\n✅ 处理完成！")
-print(f"📦 生成的 IPv4 数量: {len(ipv4_set)}")
-print(f"📦 生成的 IPv6 数量: {len(ipv6_set)}")
+# 4. 阶段二：执行真实下载测速
+final_ipv4 = run_download_test(tested_ipv4)
+
+# 5. 保存结果
+filename = 'ipv4_premium.txt'
+print(f"\n💾 正在保存优选结果...")
+if os.path.exists(filename): os.remove(filename)
+with open(filename, 'w', encoding='utf-8') as f:
+    f.write("IP地址, TCP延迟(ms), 下载速度(MB/s)\n")
+    for ip, latency, speed in final_ipv4:
+        f.write(f"{ip}, {latency:.2f}, {speed:.2f}\n")
+
+print(f"\n✅ 全部处理完成！最终测出的 IPv4 优选节点已保存至: {filename}")
